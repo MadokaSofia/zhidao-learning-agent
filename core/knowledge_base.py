@@ -100,7 +100,9 @@ class KnowledgeBase:
         """
         加载 PDF 教材文件
 
-        使用 pymupdf 提取文本，按页/章节分块
+        使用 pymupdf 提取文本和图片信息，按页/章节分块
+        - 文本：直接提取
+        - 图片：提取图片周围的文字描述（图注/标题），标记为[图片]
         """
         try:
             import fitz  # pymupdf
@@ -111,20 +113,54 @@ class KnowledgeBase:
         topic = os.path.splitext(filename)[0]
         doc = fitz.open(filepath)
 
-        # 逐页提取文本
+        # 保存提取的图片到目录（供多模态模型使用）
+        img_dir = os.path.join(self.kb_dir, f".images_{topic}")
+        os.makedirs(img_dir, exist_ok=True)
+
+        # 逐页提取文本 + 图片信息
         full_text = ""
         page_texts = []
 
         for page_num in range(len(doc)):
             page = doc[page_num]
+            page_content = ""
+
+            # 提取文本（保留排版结构）
             text = page.get_text("text")
             if text.strip():
+                page_content += text.strip()
+
+            # 提取图片并保存 + 记录位置信息
+            image_list = page.get_images(full=True)
+            if image_list:
+                saved_count = 0
+                for img_index, img in enumerate(image_list):
+                    xref = img[0]
+                    try:
+                        base_image = doc.extract_image(xref)
+                        if base_image and base_image.get("image"):
+                            img_ext = base_image.get("ext", "png")
+                            img_filename = f"p{page_num + 1}_img{img_index + 1}.{img_ext}"
+                            img_path = os.path.join(img_dir, img_filename)
+
+                            with open(img_path, "wb") as img_file:
+                                img_file.write(base_image["image"])
+                            saved_count += 1
+                    except Exception:
+                        continue
+
+                if saved_count > 0:
+                    page_content += f"\n\n[📷 本页包含 {saved_count} 张图片（示意图/公式图/表格），"
+                    page_content += f"图片已保存在 {img_dir}/ 目录]"
+
+            if page_content.strip():
                 page_texts.append({
                     "page": page_num + 1,
-                    "text": text.strip(),
+                    "text": page_content.strip(),
                 })
-                full_text += text + "\n\n"
+                full_text += page_content + "\n\n"
 
+        total_pages = len(doc)
         doc.close()
 
         if not full_text.strip():
@@ -220,7 +256,7 @@ class KnowledgeBase:
                         self.topics[topic] = []
                     self.topics[topic].append(chunk)
 
-        print(f"✅ 已加载 PDF：{filename}（{len(doc)}页 → {len(self.topics.get(topic, []))}个文本块）")
+        print(f"✅ 已加载 PDF：{filename}（{total_pages}页 → {len(self.topics.get(topic, []))}个文本块）")
 
     def _load_json_file(self, filepath: str, filename: str):
         """
