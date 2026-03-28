@@ -138,6 +138,9 @@ class LearningSession:
         Returns:
             AI 的开场白
         """
+        # 提前加载教材知识库
+        self.knowledge_base.load()
+
         # 创建数据库会话记录
         self.session_id = self.db_client.create_session(
             self.user_id, self.topic, self.mode

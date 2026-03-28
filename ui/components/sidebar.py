@@ -62,6 +62,17 @@ def _render_session_info(session):
     st.markdown(f"### 📖 {session.topic}")
     st.caption(f"模式：{'学科攻克' if session.mode == 'academic' else '领域探索'}")
 
+    # 教材知识库状态
+    kb = session.knowledge_base
+    if kb._loaded and kb.chunks:
+        file_count = len(set(c.source for c in kb.chunks))
+        chunk_count = len(kb.chunks)
+        st.success(f"📚 教材已加载：{file_count} 个文件，{chunk_count} 个知识片段")
+    elif kb._loaded:
+        st.warning("📂 未检测到教材文件，AI 将基于自身知识教学")
+    else:
+        st.info("📂 教材加载中...")
+
     # 认知水平
     score_summary = session.scoring_engine.get_score_summary()
     score = score_summary["current_score"]
