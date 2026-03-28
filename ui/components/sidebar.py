@@ -11,6 +11,24 @@ def render_sidebar(session=None):
     with st.sidebar:
         st.markdown("## 🧠 知道")
         st.markdown("*自适应智能学习助手*")
+
+        # 思考模式开关 — 直接显示在顶部
+        agent_mode = st.toggle(
+            "🧠 深度思考模式",
+            value=True,
+            key="agent_mode_toggle",
+            help="开启：AI 自主思考决策，更聪明但稍慢（约8秒）\n关闭：快速模式，响应更快（约3秒）",
+        )
+        if agent_mode:
+            st.caption("🧠 深度思考中 — AI 自主决策，更智能")
+        else:
+            st.caption("⚡ 快速模式 — 固定流程，秒回")
+
+        # 实时同步到 session
+        current_session = st.session_state.get("learning_session")
+        if current_session:
+            current_session._use_agent = agent_mode
+
         st.divider()
 
         if session:
@@ -90,27 +108,6 @@ def _render_session_info(session):
 def _render_settings():
     """渲染设置区域"""
     with st.expander("⚙️ 设置", expanded=False):
-        # Agent 模式切换
-        st.markdown("**🤖 思考模式**")
-        agent_mode = st.toggle(
-            "Agent 智能模式",
-            value=True,
-            key="agent_mode_toggle",
-            help="开启：AI 自主思考决策（更智能但稍慢）\n关闭：规则驱动模式（更快速）",
-        )
-
-        # 实时同步到 session
-        session = st.session_state.get("learning_session")
-        if session:
-            session._use_agent = agent_mode
-
-        if agent_mode:
-            st.caption("🧠 Agent 模式：AI 自主决策，更智能")
-        else:
-            st.caption("⚡ 规则模式：固定流程，响应更快")
-
-        st.markdown("---")
-
         st.markdown("**AI 模型**")
         provider = st.selectbox(
             "选择模型",
