@@ -33,6 +33,7 @@ class AppConfig:
     ai: AIConfig = field(default_factory=AIConfig)
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     debug: bool = False
+    knowledge_base_dir: str = ""  # 自定义教材目录路径（留空则用默认的 knowledge_base/）
 
 
 def load_config() -> AppConfig:
@@ -80,6 +81,9 @@ def load_config() -> AppConfig:
             config.ai.model = _get_secret("ZHIPU_MODEL", "glm-4")
 
     config.debug = _get_secret("DEBUG", "false").lower() == "true"
+
+    # --- 教材知识库路径 ---
+    config.knowledge_base_dir = _get_secret_section("ai", "knowledge_base_dir", "")
 
     return config
 

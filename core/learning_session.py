@@ -47,6 +47,7 @@ class LearningSession:
         topic: str,
         mode: str,  # "academic" or "explore"
         role: str,  # "student" / "professional" / "curious"
+        knowledge_base_dir: str = None,  # 自定义教材目录路径
     ):
         self.ai_client = ai_client
         self.db_client = db_client
@@ -60,7 +61,7 @@ class LearningSession:
         self.scoring_engine = ScoringEngine()
         self.prompt_builder = PromptBuilder()
         self.fact_checker = FactChecker(ai_client)
-        self.knowledge_base = KnowledgeBase()
+        self.knowledge_base = KnowledgeBase(kb_dir=knowledge_base_dir) if knowledge_base_dir else KnowledgeBase()
 
         # 新增：记忆管理器
         self.memory_manager = MemoryManager(db_client)

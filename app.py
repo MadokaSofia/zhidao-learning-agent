@@ -126,6 +126,9 @@ def init_clients(config: AppConfig) -> bool:
 
 def start_learning(role: str, topic: str, mode: str):
     """启动学习会话"""
+    config = st.session_state.get("config")
+    kb_dir = config.knowledge_base_dir if config and config.knowledge_base_dir else None
+
     session = LearningSession(
         ai_client=st.session_state["ai_client"],
         db_client=st.session_state["db_client"],
@@ -133,6 +136,7 @@ def start_learning(role: str, topic: str, mode: str):
         topic=topic,
         mode=mode,
         role=role,
+        knowledge_base_dir=kb_dir,
     )
 
     # 获取开场白
