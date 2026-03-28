@@ -24,6 +24,10 @@ class AIClient:
             self._client = OpenAI(
                 api_key=self.config.ai.api_key,
                 base_url=self.config.ai.base_url,
+                default_headers={
+                    "wecode-user": "suying6",
+                    "wecode-action": "wegent",
+                },
             )
         return self._client
 
