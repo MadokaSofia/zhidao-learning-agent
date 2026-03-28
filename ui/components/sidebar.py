@@ -90,6 +90,27 @@ def _render_session_info(session):
 def _render_settings():
     """渲染设置区域"""
     with st.expander("⚙️ 设置", expanded=False):
+        # Agent 模式切换
+        st.markdown("**🤖 思考模式**")
+        agent_mode = st.toggle(
+            "Agent 智能模式",
+            value=True,
+            key="agent_mode_toggle",
+            help="开启：AI 自主思考决策（更智能但稍慢）\n关闭：规则驱动模式（更快速）",
+        )
+
+        # 实时同步到 session
+        session = st.session_state.get("learning_session")
+        if session:
+            session._use_agent = agent_mode
+
+        if agent_mode:
+            st.caption("🧠 Agent 模式：AI 自主决策，更智能")
+        else:
+            st.caption("⚡ 规则模式：固定流程，响应更快")
+
+        st.markdown("---")
+
         st.markdown("**AI 模型**")
         provider = st.selectbox(
             "选择模型",
@@ -102,6 +123,7 @@ def _render_settings():
         st.markdown("---")
         st.markdown("**关于「知道」**")
         st.caption(
-            "自适应智能学习助手 v1.0\n"
-            "苏格拉底追问 × 性格感知 × 认知评估"
+            "自适应智能学习助手 v2.0\n"
+            "苏格拉底追问 × 性格感知 × 认知评估\n"
+            "Agent 架构 × 跨会话记忆"
         )

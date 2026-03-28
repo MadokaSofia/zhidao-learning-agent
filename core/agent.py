@@ -145,8 +145,8 @@ class TeachingAgent:
     - 自我反思教学效果
     """
 
-    MAX_ITERATIONS = 6    # 最大 ReAct 迭代次数
-    REFLECT_INTERVAL = 2  # 每 N 轮做一次自评
+    MAX_ITERATIONS = 3    # 最大 ReAct 迭代次数（控制响应速度）
+    REFLECT_INTERVAL = 3  # 每 N 轮做一次自评（减少额外 AI 调用）
 
     def __init__(self, ai_client, tool_registry, session_context: dict):
         self.ai_client = ai_client
