@@ -12,6 +12,7 @@ from core.personality_engine import PersonalityEngine
 from core.scoring_engine import ScoringEngine
 from core.prompt_builder import PromptBuilder
 from core.fact_checker import FactChecker
+from core.knowledge_base import KnowledgeBase
 from database.supabase_client import DatabaseClient
 from utils.helpers import calculate_level, get_timestamp
 
@@ -43,6 +44,7 @@ class LearningSession:
         self.scoring_engine = ScoringEngine()
         self.prompt_builder = PromptBuilder()
         self.fact_checker = FactChecker(ai_client)
+        self.knowledge_base = KnowledgeBase()
 
         # 会话状态
         self.session_id: Optional[str] = None
@@ -90,6 +92,11 @@ class LearningSession:
         system_prompt = self.prompt_builder.build_system_prompt(
             self.mode, self.role, self.topic, teaching_params, score_summary
         )
+
+        # === 📖 注入教材知识库 ===
+        kb_context = self._get_kb_context(self.topic)
+        if kb_context:
+            system_prompt += kb_context
 
         # 组装消息
         self.conversation_history = [
@@ -167,6 +174,11 @@ class LearningSession:
         # 添加策略提示
         strategy_addon = self._build_strategy_addon(strategy_hints, teaching_params)
         updated_system_prompt += strategy_addon
+
+        # === 📖 根据用户消息检索教材，注入相关片段 ===
+        kb_context = self._get_kb_context(user_message)
+        if kb_context:
+            updated_system_prompt += kb_context
 
         # 更新对话历史中的系统提示
         if self.conversation_history and self.conversation_history[0]["role"] == "system":
@@ -259,6 +271,24 @@ class LearningSession:
         addon += f"- 当前水平：{strategy_hints.get('current_level', 'L2')}\n"
 
         return addon
+
+    def _get_kb_context(self, query: str) -> str:
+        """
+        从教材知识库检索相关内容
+
+        Args:
+            query: 检索查询（主题名或用户消息）
+
+        Returns:
+            格式化后的教材参考文本，若无匹配返回空字符串
+        """
+        try:
+            chunks = self.knowledge_base.search(query, topic=self.topic, top_k=3)
+            if chunks:
+                return self.knowledge_base.format_context(chunks)
+        except Exception:
+            pass
+        return ""
 
     def _prepare_messages(self) -> list[dict]:
         """
