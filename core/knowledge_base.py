@@ -3,9 +3,9 @@ core/knowledge_base.py - 教材知识库引擎（RAG）
 开发者预注入权威教材，AI 基于教材内容教学，确保知识准确
 
 使用方式：
-1. 把教材文本文件放到 knowledge_base/ 目录下
-   支持格式：.txt / .md / .json
-2. 文件命名建议：「主题名.txt」如「初中物理-力学.txt」「AI Agent.md」
+1. 把教材文件放到 knowledge_base/ 目录下
+   支持格式：.txt / .md / .json / .pdf
+2. 文件命名建议：「主题名.pdf」如「初中物理-力学.pdf」「AI Agent.md」
 3. 系统自动加载、分块、建立索引
 4. 对话时自动检索最相关的教材片段，注入到 AI 提示词中
 """
@@ -76,6 +76,8 @@ class KnowledgeBase:
                 self._load_text_file(filepath, filename)
             elif filename.endswith(".json"):
                 self._load_json_file(filepath, filename)
+            elif filename.endswith(".pdf"):
+                self._load_pdf_file(filepath, filename)
 
         self._loaded = True
 
@@ -93,6 +95,132 @@ class KnowledgeBase:
         if topic not in self.topics:
             self.topics[topic] = []
         self.topics[topic].extend(chunks)
+
+    def _load_pdf_file(self, filepath: str, filename: str):
+        """
+        加载 PDF 教材文件
+
+        使用 pymupdf 提取文本，按页/章节分块
+        """
+        try:
+            import fitz  # pymupdf
+        except ImportError:
+            print(f"⚠️ 跳过 PDF 文件 {filename}：请安装 pymupdf (pip install pymupdf)")
+            return
+
+        topic = os.path.splitext(filename)[0]
+        doc = fitz.open(filepath)
+
+        # 逐页提取文本
+        full_text = ""
+        page_texts = []
+
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            text = page.get_text("text")
+            if text.strip():
+                page_texts.append({
+                    "page": page_num + 1,
+                    "text": text.strip(),
+                })
+                full_text += text + "\n\n"
+
+        doc.close()
+
+        if not full_text.strip():
+            print(f"⚠️ PDF 文件 {filename} 未提取到文本（可能是扫描版图片PDF）")
+            return
+
+        # 尝试按章节标题分块
+        # 常见教材章节标题模式：「第X章」「第X节」「X.X」等
+        chapter_pattern = re.compile(
+            r"(第[一二三四五六七八九十\d]+[章节篇]|"
+            r"\d+\.\d+\s|"
+            r"[一二三四五六七八九十]+[、.]\s*\S+|"
+            r"Chapter\s+\d+)",
+            re.MULTILINE
+        )
+
+        sections = chapter_pattern.split(full_text)
+        titles = chapter_pattern.findall(full_text)
+
+        if len(titles) >= 2:
+            # 有明确的章节结构，按章节分块
+            for i, section_text in enumerate(sections):
+                section_text = section_text.strip()
+                if not section_text or len(section_text) < 20:
+                    continue
+
+                section_title = titles[i - 1].strip() if i > 0 and i - 1 < len(titles) else f"第{i}部分"
+
+                # 长章节进一步分块
+                if len(section_text) > self.CHUNK_SIZE:
+                    sub_chunks = self._split_long_text(section_text)
+                    for j, sub in enumerate(sub_chunks):
+                        chunk = TextChunk(
+                            content=sub,
+                            source=filename,
+                            topic=topic,
+                            chunk_id=hashlib.md5(f"{filename}-{i}-{j}".encode()).hexdigest()[:12],
+                            section_title=section_title,
+                            keywords=self._extract_keywords(sub),
+                        )
+                        self.chunks.append(chunk)
+                        if topic not in self.topics:
+                            self.topics[topic] = []
+                        self.topics[topic].append(chunk)
+                else:
+                    chunk = TextChunk(
+                        content=section_text,
+                        source=filename,
+                        topic=topic,
+                        chunk_id=hashlib.md5(f"{filename}-{i}".encode()).hexdigest()[:12],
+                        section_title=section_title,
+                        keywords=self._extract_keywords(section_text),
+                    )
+                    self.chunks.append(chunk)
+                    if topic not in self.topics:
+                        self.topics[topic] = []
+                    self.topics[topic].append(chunk)
+        else:
+            # 没有明确章节，按页分块
+            for page_info in page_texts:
+                text = page_info["text"]
+                page_num = page_info["page"]
+
+                if len(text) < 30:
+                    continue  # 跳过几乎空白的页
+
+                if len(text) > self.CHUNK_SIZE:
+                    sub_chunks = self._split_long_text(text)
+                    for j, sub in enumerate(sub_chunks):
+                        chunk = TextChunk(
+                            content=sub,
+                            source=filename,
+                            topic=topic,
+                            chunk_id=hashlib.md5(f"{filename}-p{page_num}-{j}".encode()).hexdigest()[:12],
+                            section_title=f"第{page_num}页",
+                            keywords=self._extract_keywords(sub),
+                        )
+                        self.chunks.append(chunk)
+                        if topic not in self.topics:
+                            self.topics[topic] = []
+                        self.topics[topic].append(chunk)
+                else:
+                    chunk = TextChunk(
+                        content=text,
+                        source=filename,
+                        topic=topic,
+                        chunk_id=hashlib.md5(f"{filename}-p{page_num}".encode()).hexdigest()[:12],
+                        section_title=f"第{page_num}页",
+                        keywords=self._extract_keywords(text),
+                    )
+                    self.chunks.append(chunk)
+                    if topic not in self.topics:
+                        self.topics[topic] = []
+                    self.topics[topic].append(chunk)
+
+        print(f"✅ 已加载 PDF：{filename}（{len(doc)}页 → {len(self.topics.get(topic, []))}个文本块）")
 
     def _load_json_file(self, filepath: str, filename: str):
         """
