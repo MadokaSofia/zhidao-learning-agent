@@ -1,6 +1,11 @@
 """
 core/learning_session.py - 学习会话管理器
 协调所有引擎，管理学习会话的完整生命周期
+
+v2.0 - Agent 架构升级：
+- 新增 TeachingAgent + ReAct 循环作为主路径
+- 原规则流水线保留为 _process_via_rules() 降级回退
+- 通过 _use_agent 开关控制
 """
 
 import json
@@ -13,6 +18,17 @@ from core.scoring_engine import ScoringEngine
 from core.prompt_builder import PromptBuilder
 from core.fact_checker import FactChecker
 from core.knowledge_base import KnowledgeBase
+from core.memory import MemoryManager
+from core.agent import TeachingAgent, AgentResult
+from core.tools import (
+    ToolRegistry,
+    AnalyzePersonalityTool,
+    AssessCognitionTool,
+    SearchTextbookTool,
+    CheckFactsTool,
+    GetTeachingStrategyTool,
+    RecallMemoryTool,
+)
 from database.supabase_client import DatabaseClient
 from utils.helpers import calculate_level, get_timestamp
 
@@ -46,6 +62,9 @@ class LearningSession:
         self.fact_checker = FactChecker(ai_client)
         self.knowledge_base = KnowledgeBase()
 
+        # 新增：记忆管理器
+        self.memory_manager = MemoryManager(db_client)
+
         # 会话状态
         self.session_id: Optional[str] = None
         self.conversation_history: list[dict] = []  # 完整对话历史
@@ -55,8 +74,51 @@ class LearningSession:
         self.socratic_depth_current: int = 0  # 当前追问深度计数
         self.phase: str = "diagnostic"  # diagnostic / teaching / wrapping_up
 
+        # Agent 模式控制
+        self._use_agent = True  # 开关：True=Agent模式，False=规则模式
+        self.agent: Optional[TeachingAgent] = None
+
         # 从数据库加载用户画像（作为初始参考）
         self._load_user_profile()
+
+        # 初始化 Agent
+        if self._use_agent:
+            try:
+                self._init_agent()
+            except Exception:
+                self._use_agent = False
+
+    def _init_agent(self):
+        """初始化 Teaching Agent 和工具注册表"""
+        # 创建工具注册表
+        registry = ToolRegistry()
+
+        # 注册所有工具
+        registry.register(AnalyzePersonalityTool(self.personality_engine))
+        registry.register(AssessCognitionTool(
+            self.ai_client, self.scoring_engine,
+            self.prompt_builder, self.personality_engine
+        ))
+        registry.register(SearchTextbookTool(self.knowledge_base))
+        registry.register(CheckFactsTool(self.fact_checker))
+        registry.register(GetTeachingStrategyTool(
+            self.personality_engine, self.scoring_engine
+        ))
+        registry.register(RecallMemoryTool(self.memory_manager))
+
+        # 构建会话上下文
+        session_context = {
+            "topic": self.topic,
+            "mode": self.mode,
+            "role": self.role,
+            "user_id": self.user_id,
+            "round_count": self.round_count,
+            "conversation_history": self.conversation_history,
+            "score_summary": self.scoring_engine.get_score_summary(),
+        }
+
+        # 创建 Agent
+        self.agent = TeachingAgent(self.ai_client, registry, session_context)
 
     def _load_user_profile(self):
         """从数据库加载用户画像作为初始参考"""
@@ -119,11 +181,10 @@ class LearningSession:
         """
         处理用户消息，返回 AI 回复
 
-        核心闭环：
-        1. 性格引擎分析用户行为
-        2. 打分引擎评估认知水平
-        3. 动态更新系统提示
-        4. 生成 AI 回复
+        路由逻辑：
+        - _use_agent=True → Agent ReAct 循环（自主决策）
+        - _use_agent=False → 原规则流水线
+        - Agent 出错 → 自动降级到规则模式
 
         Args:
             user_message: 用户输入
@@ -133,6 +194,79 @@ class LearningSession:
         """
         self.round_count += 1
 
+        if self._use_agent and self.agent:
+            try:
+                return self._process_via_agent(user_message)
+            except Exception as e:
+                # Agent 出错，降级到规则模式
+                return self._process_via_rules(user_message)
+
+        return self._process_via_rules(user_message)
+
+    # ==================== Agent 路径 ====================
+
+    def _process_via_agent(self, user_message: str) -> str:
+        """
+        通过 Agent ReAct 循环处理用户消息
+
+        Agent 自主决定调用哪些工具、以什么顺序
+        """
+        # 更新 Agent 上下文
+        self.agent.session_context.update({
+            "round_count": self.round_count,
+            "conversation_history": self.conversation_history,
+            "user_message": user_message,
+            "score_summary": self.scoring_engine.get_score_summary(),
+        })
+
+        # 运行 Agent
+        result: AgentResult = self.agent.run(user_message, self.conversation_history)
+        response = result.response
+
+        # === 后处理（与规则模式共享） ===
+
+        # 判断 Agent 是否已经调用了 assess_cognition
+        tool_names_used = []
+        for step in result.scratchpad:
+            action_str = step.get("action", "")
+            tool_name = action_str.split("(")[0] if "(" in action_str else action_str
+            tool_names_used.append(tool_name)
+
+        # 如果 Agent 调用了 assess_cognition，保存评分日志
+        if "assess_cognition" in tool_names_used:
+            if self.scoring_engine.history:
+                latest = self.scoring_engine.history[-1]
+                self.db_client.save_scoring_log(self.session_id, latest.to_dict())
+
+        # 记录发送时间
+        self.personality_engine.record_message_sent()
+
+        # 添加到对话历史
+        self.conversation_history.append({"role": "user", "content": user_message})
+        self.conversation_history.append({"role": "assistant", "content": response})
+
+        # 提取知识点高亮
+        self._extract_and_save_highlights(response)
+
+        # 保存用户画像
+        self._save_user_profile()
+
+        # 更新会话信息
+        self.db_client.update_session(self.session_id, {
+            "rounds": self.round_count,
+            "end_level": self.scoring_engine.current_level,
+        })
+
+        return response
+
+    # ==================== 规则模式（降级回退） ====================
+
+    def _process_via_rules(self, user_message: str) -> str:
+        """
+        原规则流水线（保留为降级回退路径）
+
+        固定 7 步：行为分析 → 认知评估 → 打分 → 策略 → 教材检索 → AI回复 → 后处理
+        """
         # ===== Step 1: 行为分析（性格引擎） =====
         behavior_signal = self.personality_engine.analyze_response(user_message)
 
@@ -213,6 +347,8 @@ class LearningSession:
         })
 
         return response
+
+    # ==================== 共享辅助方法 ====================
 
     def _assess_user_response(self, user_message: str) -> dict:
         """调用 AI 进行内循环打分评估"""
@@ -388,6 +524,8 @@ class LearningSession:
         """
         生成学习会话总结
 
+        v2.0: 新增 Agent 反思 + 记忆存储
+
         Returns:
             dict 包含笔记、知识图谱、行动建议等
         """
@@ -409,6 +547,18 @@ class LearningSession:
             self.topic, conversation_summary
         )
         knowledge_map = self.ai_client.chat(map_messages, stream=False)
+
+        # === 新增：Agent 反思 + 存入记忆 ===
+        if self._use_agent and self.agent:
+            try:
+                reflection = self.agent.generate_session_reflection(
+                    self.conversation_history
+                )
+                self.memory_manager.store_session_reflection(
+                    self.user_id, self.topic, self.session_id, reflection
+                )
+            except Exception:
+                pass  # 反思失败不阻塞主流程
 
         # 保存
         self.db_client.save_session_notes(

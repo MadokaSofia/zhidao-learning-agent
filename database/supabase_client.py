@@ -418,3 +418,60 @@ class DatabaseClient:
             self.client.table("new_insights").insert(record).execute()
         except Exception:
             pass
+
+    # ==================== Agent 记忆 ====================
+    # 表结构（需在 Supabase Dashboard 中创建）:
+    # CREATE TABLE IF NOT EXISTS agent_memory (
+    #     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    #     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    #     topic TEXT NOT NULL,
+    #     category TEXT NOT NULL,  -- breakpoint/highlight/preference/progress
+    #     content TEXT NOT NULL,
+    #     importance FLOAT DEFAULT 0.5,
+    #     session_id UUID,
+    #     created_at TIMESTAMPTZ DEFAULT NOW()
+    # );
+
+    def save_agent_memory(self, data: dict):
+        """保存 Agent 记忆条目"""
+        if not self.enabled:
+            return
+        try:
+            self.client.table("agent_memory").insert(data).execute()
+        except Exception:
+            pass
+
+    def get_agent_memories(self, user_id: str, topic: str = None,
+                           category: str = None, limit: int = 15) -> list:
+        """
+        获取 Agent 记忆
+
+        Args:
+            user_id: 用户 ID
+            topic: 可选，按主题过滤
+            category: 可选，按分类过滤
+            limit: 返回数量上限
+
+        Returns:
+            记忆条目列表
+        """
+        if not self.enabled:
+            return []
+        try:
+            query = (
+                self.client.table("agent_memory")
+                .select("*")
+                .eq("user_id", user_id)
+                .order("importance", desc=True)
+                .order("created_at", desc=True)
+                .limit(limit)
+            )
+            if topic:
+                query = query.eq("topic", topic)
+            if category:
+                query = query.eq("category", category)
+
+            result = query.execute()
+            return result.data or []
+        except Exception:
+            return []

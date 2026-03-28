@@ -76,6 +76,37 @@ class AIClient:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
+    def chat_with_retry(
+        self,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_retries: int = 2,
+        stream: bool = False,
+    ) -> str:
+        """
+        带重试的对话请求（供 Agent 循环使用）
+
+        Args:
+            messages: 对话消息列表
+            temperature: 温度参数
+            max_retries: 最大重试次数
+            stream: 是否流式
+
+        Returns:
+            str 回复文本
+        """
+        import time as _time
+        for attempt in range(max_retries + 1):
+            try:
+                result = self.chat(messages, temperature=temperature, stream=stream)
+                if isinstance(result, str) and result:
+                    return result
+            except Exception as e:
+                if attempt == max_retries:
+                    return f"AI 调用失败: {str(e)}"
+                _time.sleep(0.5)
+        return "AI 调用失败: 未知错误"
+
     def chat_json(
         self,
         messages: list[dict],
