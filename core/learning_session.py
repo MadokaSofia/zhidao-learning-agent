@@ -11,6 +11,7 @@ from core.ai_client import AIClient
 from core.personality_engine import PersonalityEngine
 from core.scoring_engine import ScoringEngine
 from core.prompt_builder import PromptBuilder
+from core.fact_checker import FactChecker
 from database.supabase_client import DatabaseClient
 from utils.helpers import calculate_level, get_timestamp
 
@@ -41,11 +42,13 @@ class LearningSession:
         self.personality_engine = PersonalityEngine()
         self.scoring_engine = ScoringEngine()
         self.prompt_builder = PromptBuilder()
+        self.fact_checker = FactChecker(ai_client)
 
         # 会话状态
         self.session_id: Optional[str] = None
         self.conversation_history: list[dict] = []  # 完整对话历史
         self.knowledge_highlights: list[str] = []  # 本次知识点高亮
+        self.fact_check_results: list[dict] = []   # 审查结果
         self.round_count: int = 0
         self.socratic_depth_current: int = 0  # 当前追问深度计数
         self.phase: str = "diagnostic"  # diagnostic / teaching / wrapping_up
@@ -279,7 +282,7 @@ class LearningSession:
         return messages
 
     def _extract_and_save_highlights(self, response: str):
-        """从 AI 回复中提取并保存知识点高亮"""
+        """从 AI 回复中提取知识点高亮，并进行二次审查"""
         # 检测是否包含知识点高亮标记
         if "📌" in response or "官方知识点" in response:
             # 简单提取高亮内容
@@ -302,7 +305,29 @@ class LearningSession:
 
             if highlight_block:
                 highlight_text = "\n".join(highlight_block)
-                self.knowledge_highlights.append(highlight_text)
+
+                # === 🛡️ 二次审查 ===
+                try:
+                    review = self.fact_checker.review_highlight(highlight_text, self.topic)
+                    self.fact_check_results.append(review)
+
+                    # 在知识点末尾附加审查标记
+                    badge = review.get("badge", "")
+                    highlight_with_badge = highlight_text + f"\n\n{badge}"
+
+                    # 如果有问题，附加警告
+                    if review.get("issues"):
+                        issues_text = " | ".join(review["issues"])
+                        highlight_with_badge += f"\n⚠️ 审查提示：{issues_text}"
+                    if review.get("corrections"):
+                        for correction in review["corrections"]:
+                            highlight_with_badge += f"\n✏️ 修正建议：{correction}"
+
+                    self.knowledge_highlights.append(highlight_with_badge)
+                except Exception:
+                    # 审查失败不阻塞主流程
+                    self.knowledge_highlights.append(highlight_text + "\n\n⚠️ 未审查")
+
                 self.db_client.save_knowledge_highlight(
                     self.session_id,
                     self.user_id,
