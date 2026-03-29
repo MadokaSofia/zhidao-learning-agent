@@ -160,7 +160,8 @@ def main():
     config = get_config()
 
     # 检查配置
-    missing = config.validate_config()
+    from utils.config import validate_config
+    missing = validate_config(config)
     if missing:
         render_config_warning(missing)
         return
