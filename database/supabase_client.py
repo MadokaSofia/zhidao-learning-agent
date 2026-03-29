@@ -137,6 +137,23 @@ CREATE TABLE IF NOT EXISTS new_insights (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 会话存档（完整状态快照，支持存档/读档）
+CREATE TABLE IF NOT EXISTS session_snapshots (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    save_id TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    mode TEXT DEFAULT 'academic',
+    role TEXT DEFAULT 'student',
+    round_count INTEGER DEFAULT 0,
+    description TEXT DEFAULT '',
+    cognitive_level TEXT DEFAULT 'L2',
+    cognitive_score FLOAT DEFAULT 30,
+    session_data JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, save_id)
+);
+
 -- 开启 RLS
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
@@ -475,3 +492,99 @@ class DatabaseClient:
             return result.data or []
         except Exception:
             return []
+
+    # ==================== 会话存档（云端持久化） ====================
+
+    def save_session_snapshot(self, user_id: str, save_id: str,
+                              topic: str, mode: str, role: str,
+                              round_count: int, description: str,
+                              cognitive_level: str, cognitive_score: float,
+                              session_data: dict) -> bool:
+        """保存完整会话快照到 Supabase"""
+        if not self.enabled:
+            return False
+        try:
+            data = {
+                "user_id": user_id,
+                "save_id": save_id,
+                "topic": topic,
+                "mode": mode,
+                "role": role,
+                "round_count": round_count,
+                "description": description,
+                "cognitive_level": cognitive_level,
+                "cognitive_score": cognitive_score,
+                "session_data": json.dumps(session_data, ensure_ascii=False),
+                "created_at": datetime.now().isoformat(),
+            }
+            self.client.table("session_snapshots").upsert(
+                data, on_conflict="user_id,save_id"
+            ).execute()
+            return True
+        except Exception:
+            return False
+
+    def load_session_snapshot(self, user_id: str, save_id: str) -> Optional[dict]:
+        """从 Supabase 加载会话快照"""
+        if not self.enabled:
+            return None
+        try:
+            result = (
+                self.client.table("session_snapshots")
+                .select("*")
+                .eq("user_id", user_id)
+                .eq("save_id", save_id)
+                .execute()
+            )
+            if result.data:
+                row = result.data[0]
+                # session_data 可能是字符串或 dict
+                sd = row.get("session_data", {})
+                if isinstance(sd, str):
+                    sd = json.loads(sd)
+                return {
+                    "save_id": row["save_id"],
+                    "user_id": row["user_id"],
+                    "topic": row["topic"],
+                    "mode": row["mode"],
+                    "role": row["role"],
+                    "round_count": row["round_count"],
+                    "description": row.get("description", ""),
+                    "cognitive_level": row.get("cognitive_level", "L2"),
+                    "cognitive_score": row.get("cognitive_score", 30),
+                    "timestamp": row.get("created_at", ""),
+                    **sd,
+                }
+            return None
+        except Exception:
+            return None
+
+    def list_session_snapshots(self, user_id: str, limit: int = 20) -> list[dict]:
+        """列出用户的所有会话快照（仅元信息，不含完整数据）"""
+        if not self.enabled:
+            return []
+        try:
+            result = (
+                self.client.table("session_snapshots")
+                .select("save_id,user_id,topic,mode,role,round_count,description,"
+                        "cognitive_level,cognitive_score,created_at")
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return result.data or []
+        except Exception:
+            return []
+
+    def delete_session_snapshot(self, user_id: str, save_id: str) -> bool:
+        """删除会话快照"""
+        if not self.enabled:
+            return False
+        try:
+            self.client.table("session_snapshots").delete().eq(
+                "user_id", user_id
+            ).eq("save_id", save_id).execute()
+            return True
+        except Exception:
+            return False

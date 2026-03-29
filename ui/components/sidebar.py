@@ -96,9 +96,13 @@ def _render_chat_list(session):
     """渲染历史对话列表"""
     # 获取存档列表
     if not session:
-        # 没有 session 时，尝试用 SessionStore 直接读取
+        # 没有 session 时，用带 db_client 的 SessionStore 读取（支持云端）
         from core.session_store import SessionStore
-        store = SessionStore()
+        from database.supabase_client import DatabaseClient
+        from utils.config import load_config
+        config = load_config()
+        db_client = DatabaseClient(config)
+        store = SessionStore(db_client=db_client)
         user_id = st.session_state.get("user_id", "")
         if user_id:
             saves = store.list_saves(user_id)

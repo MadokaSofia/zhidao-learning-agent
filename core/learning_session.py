@@ -79,7 +79,7 @@ class LearningSession:
         # v3.0：知识树 + 学习计划 + 存档
         self.knowledge_tree = KnowledgeTree()
         self.learning_planner = LearningPlanner()
-        self.session_store = SessionStore()
+        self.session_store = SessionStore(db_client=db_client)
 
         # 会话状态
         self.session_id: Optional[str] = None

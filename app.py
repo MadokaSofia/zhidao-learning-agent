@@ -165,7 +165,8 @@ def _handle_loading_phase(config):
 
     with st.spinner("📂 正在加载存档..."):
         from core.session_store import SessionStore
-        store = SessionStore()
+        db_client = DatabaseClient(config)
+        store = SessionStore(db_client=db_client)
         save = store.load_session(user_id, save_id)
 
         if not save:
