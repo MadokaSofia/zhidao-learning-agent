@@ -98,6 +98,7 @@ class SessionStore:
 
     SAVE_DIR = ".saves"
     MAX_SAVES = 20  # 每个用户最多保存 20 个存档
+    AUTOSAVE_ID = "_autosave"  # 自动存档使用的固定 ID
 
     def __init__(self, db_client=None):
         """
@@ -127,14 +128,19 @@ class SessionStore:
         knowledge_tree_data: dict = None,
         planner_data: dict = None,
         description: str = "",
+        save_id: str = None,
     ) -> str:
         """
         保存当前会话
 
+        Args:
+            save_id: 可选，指定存档 ID（用于自动存档覆盖写）
+
         Returns:
             存档 ID
         """
-        save_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if not save_id:
+            save_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         save = SessionSave(
@@ -201,13 +207,16 @@ class SessionStore:
         return self._load_local(user_id, save_id)
 
     def list_saves(self, user_id: str) -> list[SessionSave]:
-        """列出用户的所有存档"""
+        """列出用户的所有存档（不包含自动存档）"""
         # 优先从云端获取
         if self._use_cloud:
             rows = self.db_client.list_session_snapshots(user_id, limit=self.MAX_SAVES)
             if rows:
                 saves = []
                 for row in rows:
+                    # 过滤自动存档
+                    if row.get("save_id", "") == self.AUTOSAVE_ID:
+                        continue
                     ts = row.get("created_at", "")
                     # 格式化时间戳
                     try:
@@ -267,14 +276,14 @@ class SessionStore:
             return None
 
     def _list_local(self, user_id: str) -> list[SessionSave]:
-        """列出本地存档"""
+        """列出本地存档（不包含自动存档）"""
         user_dir = os.path.join(self.SAVE_DIR, user_id)
         if not os.path.exists(user_dir):
             return []
 
         saves = []
         for filename in sorted(os.listdir(user_dir), reverse=True):
-            if filename.endswith(".json"):
+            if filename.endswith(".json") and not filename.startswith(self.AUTOSAVE_ID):
                 filepath = os.path.join(user_dir, filename)
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:

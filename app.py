@@ -119,6 +119,9 @@ def start_learning(role: str, topic: str, mode: str):
         {"role": "assistant", "content": opening}
     ]
 
+    # 自动存档，防止刷新丢失
+    _autosave(session)
+
     st.rerun()
 
 
@@ -140,6 +143,9 @@ def handle_user_input(user_input: str):
         {"role": "assistant", "content": response}
     )
 
+    # 每轮对话后自动存档，防止刷新丢失
+    _autosave(session)
+
     st.rerun()
 
 
@@ -157,6 +163,8 @@ def end_learning():
 
 def restart_learning():
     """重新开始"""
+    # 清除自动存档
+    _clear_autosave()
     for key in ["session", "summary", "messages_display", "show_saves",
                 "selected_role", "topic_input", "topic_field"]:
         if key in st.session_state:
@@ -164,6 +172,129 @@ def restart_learning():
     st.session_state.phase = "onboarding"
     st.session_state.messages_display = []
     st.rerun()
+
+
+# ==================== 自动存档（防刷新丢失） ====================
+
+def _autosave(session):
+    """自动存档当前对话到 Supabase（覆盖写，使用固定 save_id）"""
+    try:
+        from core.session_store import SessionStore
+        scoring_data = session.scoring_engine.get_score_summary()
+        scoring_data["history"] = [r.to_dict() for r in session.scoring_engine.history]
+        personality_data = session.personality_engine.profile.to_dict()
+
+        kt_data = {}
+        if session.knowledge_tree.nodes:
+            kt_data = {
+                "topic": session.knowledge_tree.topic,
+                "root_id": session.knowledge_tree.root_id,
+                "created_at": session.knowledge_tree.created_at,
+                "nodes": {nid: n.to_dict() for nid, n in session.knowledge_tree.nodes.items()},
+            }
+
+        session.session_store.save_session(
+            user_id=session.user_id,
+            topic=session.topic,
+            mode=session.mode,
+            role=session.role,
+            round_count=session.round_count,
+            conversation_history=session.conversation_history,
+            messages_display=st.session_state.get("messages_display", []),
+            knowledge_highlights=session.knowledge_highlights,
+            scoring_data=scoring_data,
+            personality_data=personality_data,
+            knowledge_tree_data=kt_data,
+            planner_data=session.learning_planner.to_dict(),
+            description="自动存档",
+            save_id=SessionStore.AUTOSAVE_ID,
+        )
+    except Exception:
+        pass
+
+
+def _try_restore_autosave(config):
+    """刷新页面时尝试从自动存档恢复当前对话"""
+    user_id = st.session_state.get("user_id", "")
+    if not user_id:
+        return False
+
+    try:
+        from core.session_store import SessionStore
+        db_client = DatabaseClient(config)
+        store = SessionStore(db_client=db_client)
+        save = store.load_session(user_id, SessionStore.AUTOSAVE_ID)
+
+        if not save or not save.messages_display:
+            return False
+
+        # 用存档数据创建新的 LearningSession
+        ai_client = AIClient(config)
+        kb_dir = config.knowledge_base_dir if config.knowledge_base_dir else None
+
+        session = LearningSession(
+            ai_client=ai_client,
+            db_client=db_client,
+            user_id=user_id,
+            topic=save.topic,
+            mode=save.mode,
+            role=save.role,
+            knowledge_base_dir=kb_dir,
+        )
+
+        # 恢复状态
+        session.round_count = save.round_count
+        session.conversation_history = save.conversation_history or []
+        session.knowledge_highlights = save.knowledge_highlights or []
+        session.scoring_engine.current_score = save.cognitive_score
+        session.scoring_engine.current_level = save.cognitive_level
+
+        if save.personality_data:
+            session.personality_engine.load_from_profile_data(save.personality_data)
+
+        if save.knowledge_tree_data and save.knowledge_tree_data.get("nodes"):
+            from core.knowledge_tree import KnowledgeNode
+            session.knowledge_tree.topic = save.knowledge_tree_data.get("topic", save.topic)
+            session.knowledge_tree.root_id = save.knowledge_tree_data.get("root_id", "root")
+            session.knowledge_tree.created_at = save.knowledge_tree_data.get("created_at", "")
+            session.knowledge_tree.nodes = {
+                nid: KnowledgeNode.from_dict(ndata)
+                for nid, ndata in save.knowledge_tree_data.get("nodes", {}).items()
+            }
+
+        if save.planner_data:
+            session.learning_planner.load_from_dict(save.planner_data)
+            session.learning_planner.knowledge_tree = session.knowledge_tree
+
+        # 重新初始化 Agent
+        if session._use_agent:
+            try:
+                session._init_agent()
+            except Exception:
+                session._use_agent = False
+
+        # 恢复到 session state
+        st.session_state.session = session
+        st.session_state.phase = "learning"
+        st.session_state.messages_display = save.messages_display
+        return True
+
+    except Exception:
+        return False
+
+
+def _clear_autosave():
+    """清除自动存档（新对话/重新开始时调用）"""
+    try:
+        from core.session_store import SessionStore
+        user_id = st.session_state.get("user_id", "")
+        if user_id:
+            config = get_config()
+            db_client = DatabaseClient(config)
+            store = SessionStore(db_client=db_client)
+            store.delete_save(user_id, SessionStore.AUTOSAVE_ID)
+    except Exception:
+        pass
 
 
 def _handle_loading_phase(config):
@@ -264,6 +395,10 @@ def main():
     phase = st.session_state.phase
 
     if phase == "onboarding":
+        # 刷新后尝试从自动存档恢复（session 不存在说明是刷新）
+        if not session and _try_restore_autosave(config):
+            st.rerun()
+            return
         result = render_onboarding()
         if result:
             role, topic, mode = result
@@ -275,6 +410,10 @@ def main():
 
     elif phase == "learning":
         if not session:
+            # 刷新后 session 丢失，尝试从自动存档恢复
+            if _try_restore_autosave(config):
+                st.rerun()
+                return
             restart_learning()
             return
 

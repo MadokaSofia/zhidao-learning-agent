@@ -79,6 +79,19 @@ def _start_new_chat(session):
             session.save_progress("自动存档")
         except Exception:
             pass
+    # 清除自动存档，防止刷新后恢复到旧对话
+    try:
+        from core.session_store import SessionStore
+        from database.supabase_client import DatabaseClient
+        from utils.config import load_config
+        config = load_config()
+        db_client = DatabaseClient(config)
+        store = SessionStore(db_client=db_client)
+        user_id = st.session_state.get("user_id", "")
+        if user_id:
+            store.delete_save(user_id, SessionStore.AUTOSAVE_ID)
+    except Exception:
+        pass
     # 清除当前会话相关的所有 session state，回到 onboarding
     keys_to_clear = [
         "session", "summary", "messages_display", "show_saves",
