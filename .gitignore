@@ -16,3 +16,7 @@ venv/
 *.swo
 .DS_Store
 .claude_session_id_*
+.claude_resume_*
+.knowledge_trees/
+.saves/
+.memory/

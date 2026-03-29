@@ -2,11 +2,11 @@
 core/agent.py - 教学 Agent 核心
 基于 ReAct（Thought → Action → Observation）推理循环的自主教学 Agent
 
-核心能力：
-- 自主决定每轮该使用哪些工具（而非固定流水线）
-- 基于推理选择教学策略
-- 每 N 轮自我反思教学效果
-- 会话结束时生成结构化反思（存入记忆）
+v3.0 升级：
+- 强化出题能力（考试真题风格和难度）
+- Mermaid 图表 + LaTeX 公式支持
+- 学习计划感知（知识树 + 进度追踪）
+- 目标驱动教学
 """
 
 import re
@@ -139,10 +139,11 @@ class TeachingAgent:
     """
     基于 ReAct 的自适应教学 Agent
 
-    替代 LearningSession 中的固定流水线，让 AI 自主决策：
-    - 选择哪些工具来分析当前状态
-    - 根据分析结果决定教学策略
-    - 自我反思教学效果
+    v3.0 能力：
+    - 考试真题风格出题
+    - Mermaid 图表 / LaTeX 公式可视化
+    - 知识树感知 + 学习计划驱动
+    - 自主决策教学策略
     """
 
     MAX_ITERATIONS = 3    # 最大 ReAct 迭代次数（控制响应速度）
@@ -289,6 +290,21 @@ class TeachingAgent:
         role_map = {"student": "学生", "professional": "职场人", "curious": "好奇宝宝"}
         role_display = role_map.get(ctx.get("role", "student"), "学生")
 
+        # 学习计划上下文
+        plan_context = ""
+        plan_summary = ctx.get("plan_summary", "")
+        if plan_summary:
+            plan_context = f"\n\n## 📅 当前学习计划\n{plan_summary}"
+
+        # 知识树上下文
+        tree_context = ""
+        tree_stats = ctx.get("tree_stats")
+        if tree_stats and tree_stats.get("total", 0) > 0:
+            tree_context = f"\n\n## 🌳 知识树状态\n已点亮 {tree_stats.get('lit_count', 0)}/{tree_stats.get('total', 0)} 个知识点"
+            weak = tree_stats.get("weak", 0)
+            if weak > 0:
+                tree_context += f"（{weak} 个薄弱）"
+
         # 模式特定教学规则
         if mode == "academic":
             mode_rules = """### 📌 官方知识点 Highlight（学科模式必须使用）
@@ -297,7 +313,7 @@ class TeachingAgent:
 📌 **官方知识点**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 **【定义】** 标准定义
-**【公式】** 公式（如有）
+**【公式】** 公式（如有，使用 LaTeX：$F=ma$）
 **【关键词】** 考试必考关键词
 **【易错点】** 常见错误
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -314,6 +330,16 @@ class TeachingAgent:
         if "recall_memory" in self.tools.list_names():
             memory_hint = "\n- 会话刚开始时，可以用 recall_memory 回忆该用户之前的学习情况"
 
+        # 知识树工具提示
+        tree_hint = ""
+        if "manage_knowledge_tree" in self.tools.list_names():
+            tree_hint = "\n- 每个知识点学完后，用 manage_knowledge_tree 更新掌握分数"
+
+        # 学习计划工具提示
+        plan_hint = ""
+        if "manage_learning_plan" in self.tools.list_names():
+            plan_hint = "\n- 可以用 manage_learning_plan 查看今日任务和下一个知识点"
+
         return f"""# 你是「知道」—— 自适应智能学习 Agent
 
 ## 你的身份
@@ -323,7 +349,7 @@ class TeachingAgent:
 - 学习主题：{ctx.get('topic', '')}
 - 学习模式：{mode_display}
 - 用户身份：{role_display}
-- 当前对话轮数：{ctx.get('round_count', 0)}
+- 当前对话轮数：{ctx.get('round_count', 0)}{plan_context}{tree_context}
 
 ## 你的工作方式（ReAct 推理循环）
 
@@ -377,6 +403,34 @@ class TeachingAgent:
 
 {mode_rules}
 
+### 🎯 考试真题风格出题（极其重要！）
+当需要出题时，必须遵循以下规则：
+- 参照历年考试真题的风格和难度，不要出过于简单或童趣的题目
+- 题目要有区分度，能测试不同层次的理解
+- 选择题的干扰项要有迷惑性（常见错误思路）
+- 简答题要考查理解深度而非死记硬背
+- 出题格式清晰规范，包含题号、选项标签
+
+### 📊 可视化内容（Mermaid + LaTeX）
+在教学中积极使用可视化来帮助理解：
+
+**LaTeX 公式**：数学、物理公式使用 LaTeX 行内语法 $...$
+- 例如：$F = ma$，$E = mc^2$，$\\sum_{{i=1}}^n a_i$
+
+**Mermaid 图表**：在讲解概念关系、流程、分类时使用
+```mermaid
+graph TD
+    A[力] --> B[重力]
+    A --> C[弹力]
+    A --> D[摩擦力]
+```
+
+使用时机：
+- 知识点之间有层次/分类关系时 → mindmap 或 graph
+- 有因果/流程关系时 → flowchart
+- 对比关系时 → 表格
+- 公式推导时 → LaTeX
+
 ### 知识准确性（极其重要）
 - 涉及定义、公式时，**必须先调用 search_textbook**
 - 如果教材中找不到且你不确定，用 ⚠️ 标注
@@ -394,7 +448,9 @@ class TeachingAgent:
 | 要讲解新知识点/给定义公式 | 调用 search_textbook |
 | 不确定知识陈述准确性 | 调用 check_facts |
 | 用户只是确认/说'好''继续' | 不需要工具，直接回复 |
-| 不确定该用什么教学风格 | 调用 get_teaching_strategy |{memory_hint}
+| 不确定该用什么教学风格 | 调用 get_teaching_strategy |
+| 一个知识点学完了 | 调用 manage_knowledge_tree 更新分数 |
+| 想知道下一步学什么 | 调用 manage_learning_plan |{memory_hint}{tree_hint}{plan_hint}
 
 ## 回复风格
 - 亲切口语化，像聊天不像上课
@@ -402,6 +458,8 @@ class TeachingAgent:
 - 类比生活场景
 - 每次回复控制在合理长度内
 - 使用 Markdown 格式
+- 涉及公式时使用 LaTeX
+- 涉及关系/结构时使用 Mermaid 图表
 """
 
     def _prepare_history(self, conversation_history: list[dict]) -> list[dict]:
