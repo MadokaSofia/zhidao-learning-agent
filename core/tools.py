@@ -2,13 +2,15 @@
 core/tools.py - Agent 工具定义
 将现有引擎包装为 Agent 可调用的工具，统一接口
 
-工具列表：
+v3.0 工具列表：
 1. analyze_personality - 分析用户行为信号，更新性格画像
 2. assess_cognition    - 五维度认知评估 + 策略建议
 3. search_textbook     - 检索教材知识库
 4. check_facts         - 知识准确性二次校验
 5. get_teaching_strategy - 获取综合教学策略
 6. recall_memory       - 回忆用户历史学习记录
+7. manage_knowledge_tree - 知识树查询与更新
+8. manage_learning_plan  - 学习计划查询与管理
 """
 
 import json
@@ -307,3 +309,99 @@ class RecallMemoryTool(AgentTool):
             return self.memory.recall(user_id, topic, category=category)
         except Exception:
             return "记忆系统暂不可用，按新用户处理。"
+
+
+class ManageKnowledgeTreeTool(AgentTool):
+    """工具7: 知识树查询与更新"""
+
+    def __init__(self, knowledge_tree):
+        self.tree = knowledge_tree
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="manage_knowledge_tree",
+            description="查询知识树状态、更新知识点掌握分数、获取统计信息。支持操作：query（查看知识树）、update（更新分数）、stats（获取统计）",
+            parameters='{"action": "query/update/stats", "node_name": "知识点名称（update时需要）", "score": 分数（update时需要，0-100）}',
+            returns="知识树信息或更新结果",
+            when_to_use="当需要查看用户知识掌握情况、更新知识点分数、或生成知识树可视化时调用。每次用户完成一个知识点的学习后应该更新分数。",
+        )
+
+    def execute(self, args: dict, context: dict) -> str:
+        action = args.get("action", "stats")
+
+        if action == "query":
+            if not self.tree.nodes:
+                return "知识树尚未生成。"
+            return self.tree.to_summary_text()
+
+        elif action == "update":
+            node_name = args.get("node_name", "")
+            score = float(args.get("score", 0))
+            if not node_name:
+                return "错误：需要提供 node_name 参数。"
+
+            node = self.tree.find_node_by_name(node_name)
+            if node:
+                self.tree.update_node_score(node.id, score)
+                return f"已更新「{node.name}」的掌握分数为 {score:.0f}%，状态：{self.tree._status_label(node.status)}"
+            return f"未找到名为「{node_name}」的知识点。"
+
+        elif action == "stats":
+            if not self.tree.nodes:
+                return "知识树尚未生成。"
+            stats = self.tree.get_stats()
+            return json.dumps(stats, ensure_ascii=False, indent=2)
+
+        return f"未知操作：{action}"
+
+
+class ManageLearningPlanTool(AgentTool):
+    """工具8: 学习计划查询与管理"""
+
+    def __init__(self, learning_planner):
+        self.planner = learning_planner
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="manage_learning_plan",
+            description="查询学习计划状态、获取今日任务、完成知识点、推进天数。支持操作：query（查看计划）、today（今日任务）、complete（完成知识点）、next（下一个知识点）",
+            parameters='{"action": "query/today/complete/next", "node_id": "知识点ID（complete时需要）", "score": 分数（complete时需要）}',
+            returns="学习计划信息",
+            when_to_use="当需要了解当前学习进度、获取下一步该学什么、或标记知识点为已完成时调用。",
+        )
+
+    def execute(self, args: dict, context: dict) -> str:
+        action = args.get("action", "query")
+
+        if action == "query":
+            return self.planner.get_plan_summary()
+
+        elif action == "today":
+            plan = self.planner.get_current_day_plan()
+            if not plan:
+                return "当前没有学习计划或今日计划已完成。"
+            return json.dumps(plan.to_dict(), ensure_ascii=False, indent=2)
+
+        elif action == "complete":
+            node_id = args.get("node_id", "")
+            score = float(args.get("score", 70))
+            if not node_id:
+                return "错误：需要提供 node_id 参数。"
+            adjust_msg = self.planner.complete_node(node_id, score)
+            result = f"已完成知识点 {node_id}，得分 {score:.0f}%。"
+            if adjust_msg:
+                result += f"\n{adjust_msg}"
+            return result
+
+        elif action == "next":
+            next_id = self.planner.get_next_node_to_learn()
+            if next_id:
+                tree = self.planner.knowledge_tree
+                if tree:
+                    node = tree.nodes.get(next_id)
+                    if node:
+                        return f"下一个学习：「{node.name}」（ID: {next_id}）"
+                return f"下一个学习：{next_id}"
+            return "今日任务已全部完成！"
+
+        return f"未知操作：{action}"
