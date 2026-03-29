@@ -85,6 +85,20 @@ def load_config() -> AppConfig:
     # --- 教材知识库路径 ---
     config.knowledge_base_dir = _get_secret_section("ai", "knowledge_base_dir", "")
 
+    # --- 从 session_state 读取临时配置（页面表单输入） ---
+    try:
+        temp_key = st.session_state.get("temp_ai_key", "")
+        if temp_key:
+            config.ai.api_key = temp_key
+        temp_url = st.session_state.get("temp_supabase_url", "")
+        if temp_url:
+            config.supabase.url = temp_url
+        temp_skey = st.session_state.get("temp_supabase_key", "")
+        if temp_skey:
+            config.supabase.key = temp_skey
+    except Exception:
+        pass
+
     return config
 
 
@@ -110,12 +124,9 @@ def _get_secret_section(section: str, key: str, default: str = "") -> str:
 def validate_config(config: AppConfig) -> list[str]:
     """
     校验配置完整性，返回缺失项列表
+    Supabase 为可选项，不强制要求
     """
     missing = []
     if not config.ai.api_key:
         missing.append(f"AI API Key ({config.ai.provider.upper()})")
-    if not config.supabase.url:
-        missing.append("SUPABASE_URL")
-    if not config.supabase.key:
-        missing.append("SUPABASE_KEY")
     return missing

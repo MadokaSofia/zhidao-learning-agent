@@ -66,9 +66,8 @@ def init_session_state():
 
 
 def get_config():
-    """获取配置"""
-    if "config" not in st.session_state:
-        st.session_state.config = load_config()
+    """获取配置（每次重新加载以支持临时表单输入）"""
+    st.session_state.config = load_config()
     return st.session_state.config
 
 
