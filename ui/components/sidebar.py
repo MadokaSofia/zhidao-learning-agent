@@ -1,6 +1,22 @@
 """
 ui/components/sidebar.py - 侧边栏组件
-v3.0: 知识树点亮、学习计划进度、存档/读档、切换模式/主题
+v3.1: ChatGPT 风格对话列表 + 知识树点亮 + 学习计划进度
+
+布局：
+┌─────────────────┐
+│ 🧠 知道 v3.0    │
+│ [+ 新对话]       │
+│ ─────────────── │
+│ 📖 初中物理  ← 当前 │
+│ 📖 高中生物      │
+│ 📖 线性代数      │
+│ ─────────────── │
+│ 🔬/⚡ 思考模式   │
+│ 📅 学习计划      │
+│ 🌳 知识树        │
+│ 📊 认知水平      │
+│ ⚙️ 设置          │
+└─────────────────┘
 """
 
 import streamlit as st
@@ -8,54 +24,33 @@ from typing import Optional
 
 
 def render_sidebar(session=None, config=None):
-    """
-    渲染侧边栏
-
-    v3.0 新功能:
-    - 知识树点亮进度
-    - 学习计划进度条
-    - 存档/读档按钮
-    - 切换主题/模式
-    - 知识汇总按钮
-    """
+    """渲染侧边栏"""
     with st.sidebar:
         st.markdown("### 🧠 知道 v3.0")
-        st.caption("自适应智能学习助手")
 
-        # ==================== 思考模式切换 ====================
-        if session:
-            current_mode_label = "🔬 深度思考" if session._use_agent else "⚡ 快速模式"
-            toggle = st.toggle(
-                f"当前：{current_mode_label}",
-                value=session._use_agent,
-                help="深度思考（~8s）使用 Agent 自主推理；快速模式（~3s）使用规则流水线",
-                key="thinking_mode_toggle",
-            )
-            if toggle != session._use_agent:
-                session._use_agent = toggle
-                if toggle and session.agent is None:
-                    try:
-                        session._init_agent()
-                    except Exception:
-                        session._use_agent = False
-                        st.warning("Agent 初始化失败，已回退到快速模式")
+        # ==================== 新对话按钮 ====================
+        if st.button("➕ 新对话", key="new_chat_btn", use_container_width=True):
+            _start_new_chat(session)
+
+        # ==================== 历史对话列表 ====================
+        _render_chat_list(session)
 
         st.markdown("---")
 
         if session:
+            # ==================== 思考模式切换 ====================
+            _render_thinking_toggle(session)
+
+            # ==================== 学习模式切换（直接切换，无确认） ====================
+            _render_mode_switch(session)
+
+            st.markdown("---")
+
             # ==================== 学习计划进度 ====================
             _render_plan_progress(session)
 
             # ==================== 知识树点亮 ====================
             _render_knowledge_tree_section(session)
-
-            # ==================== 存档/读档 ====================
-            _render_save_load(session)
-
-            # ==================== 切换主题/模式 ====================
-            _render_switch_controls(session)
-
-            st.markdown("---")
 
             # ==================== 认知水平 ====================
             _render_cognitive_level(session)
@@ -71,38 +66,159 @@ def render_sidebar(session=None, config=None):
         # ==================== 设置 ====================
         with st.expander("⚙️ 设置"):
             if config:
-                st.caption(f"AI 提供商：{config.ai.provider}")
-                st.caption(f"模型：{config.ai.model}")
+                st.caption(f"AI：{config.ai.provider} / {config.ai.model}")
             st.caption("知道 v3.0 - 目标驱动学习")
 
 
+# ==================== 对话列表（ChatGPT 风格） ====================
+
+def _start_new_chat(session):
+    """开始新对话：先保存当前，再跳转到 onboarding"""
+    if session:
+        try:
+            session.save_progress("自动存档")
+        except Exception:
+            pass
+    # 清除当前会话，回到 onboarding
+    for key in ["session", "summary", "messages_display"]:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.session_state.phase = "onboarding"
+    st.session_state.messages_display = []
+    st.rerun()
+
+
+def _render_chat_list(session):
+    """渲染历史对话列表"""
+    # 获取存档列表
+    if not session:
+        # 没有 session 时，尝试用 SessionStore 直接读取
+        from core.session_store import SessionStore
+        store = SessionStore()
+        user_id = st.session_state.get("user_id", "")
+        if user_id:
+            saves = store.list_saves(user_id)
+        else:
+            saves = []
+    else:
+        saves = session.list_saves()
+
+    if not saves:
+        return
+
+    st.caption("📂 历史对话")
+
+    for save in saves[:8]:  # 最多显示8个
+        # 当前对话高亮
+        is_current = (
+            session
+            and session.topic == save.topic
+            and session.round_count == save.round_count
+        )
+
+        # 构建显示文本
+        label = f"📖 {save.topic}"
+        detail = f"{save.cognitive_level} · {save.round_count}轮 · {save.timestamp}"
+
+        if is_current:
+            st.markdown(f"**▸ {label}**")
+            st.caption(f"  {detail} (当前)")
+        else:
+            if st.button(label, key=f"chat_{save.save_id}", use_container_width=True):
+                _load_chat(session, save.save_id, save.user_id)
+            st.caption(f"  {detail}")
+
+
+def _load_chat(session, save_id, user_id):
+    """加载历史对话"""
+    if session:
+        success = session.load_progress(save_id)
+        if success:
+            st.session_state.phase = "learning"
+            st.rerun()
+    else:
+        # 没有 session，需要创建一个然后加载
+        from core.session_store import SessionStore
+        store = SessionStore()
+        save = store.load_session(user_id, save_id)
+        if save:
+            # 存到 session_state，让 app.py 重新初始化
+            st.session_state["pending_load"] = save
+            st.session_state.phase = "loading"
+            st.rerun()
+
+
+# ==================== 思考模式 ====================
+
+def _render_thinking_toggle(session):
+    """渲染思考模式切换"""
+    toggle = st.toggle(
+        "🔬 深度思考" if session._use_agent else "⚡ 快速模式",
+        value=session._use_agent,
+        help="深度思考（Agent 推理）/ 快速模式（规则流水线）",
+        key="thinking_mode_toggle",
+    )
+    if toggle != session._use_agent:
+        session._use_agent = toggle
+        if toggle and session.agent is None:
+            try:
+                session._init_agent()
+            except Exception:
+                session._use_agent = False
+
+
+# ==================== 模式切换（直接生效） ====================
+
+def _render_mode_switch(session):
+    """渲染学习模式切换（直接切换，无确认按钮）"""
+    modes = ["学科攻克", "领域探索"]
+    mode_map = {"学科攻克": "academic", "领域探索": "explore"}
+    current_idx = 0 if session.mode == "academic" else 1
+
+    new_mode = st.radio(
+        "学习模式",
+        modes,
+        index=current_idx,
+        horizontal=True,
+        key="mode_radio",
+        label_visibility="collapsed",
+    )
+
+    if mode_map[new_mode] != session.mode:
+        session.switch_mode(mode_map[new_mode])
+        st.rerun()
+
+
+# ==================== 学习计划进度 ====================
+
 def _render_plan_progress(session):
     """渲染学习计划进度"""
-    if session.learning_planner.has_active_plan:
-        info = session.learning_planner.get_sidebar_info()
-        if info:
-            st.markdown(f"### 📅 {info['topic']}")
-            st.markdown(f"**Day {info['current_day']}/{info['target_days']}**")
+    if not session.learning_planner.has_active_plan:
+        return
 
-            # 进度条
-            pct = info.get("progress_pct", 0)
-            st.progress(min(pct / 100, 1.0))
-            st.caption(f"完成 {info['completed_nodes']}/{info['total_nodes']} 知识点 ({pct:.0f}%)")
+    info = session.learning_planner.get_sidebar_info()
+    if not info:
+        return
 
-            # 今日任务
-            today = info.get("today_plan")
-            if today:
-                with st.expander("📋 今日任务", expanded=True):
-                    for i, name in enumerate(today.get("node_names", [])):
-                        nid = today.get("node_ids", [])[i] if i < len(today.get("node_ids", [])) else ""
-                        is_done = nid in today.get("completed_ids", [])
-                        if is_done:
-                            st.markdown(f"  ✅ ~~{name}~~")
-                        else:
-                            st.markdown(f"  ⬜ {name}")
+    st.markdown(f"### 📅 学习计划")
+    st.markdown(f"**{info['topic']}** · Day {info['current_day']}/{info['target_days']}")
 
-            st.markdown("---")
+    pct = info.get("progress_pct", 0)
+    st.progress(min(pct / 100, 1.0))
+    st.caption(f"已完成 {info['completed_nodes']}/{info['total_nodes']} ({pct:.0f}%)")
 
+    today = info.get("today_plan")
+    if today:
+        with st.expander("📋 今日任务", expanded=False):
+            for i, name in enumerate(today.get("node_names", [])):
+                nid = today.get("node_ids", [])[i] if i < len(today.get("node_ids", [])) else ""
+                is_done = nid in today.get("completed_ids", [])
+                st.markdown(f"{'✅' if is_done else '⬜'} {name}")
+
+    st.markdown("---")
+
+
+# ==================== 知识树 ====================
 
 def _render_knowledge_tree_section(session):
     """渲染知识树点亮区域"""
@@ -111,33 +227,28 @@ def _render_knowledge_tree_section(session):
         total = stats["total"]
         lit = stats["lit_count"]
 
-        st.markdown("### 🌳 知识树")
-        st.markdown(f"🔥 已点亮 **{lit}/{total}** 知识点")
+        st.markdown(f"### 🌳 知识树 · {lit}/{total}")
 
-        # 点亮进度条
         if total > 0:
             st.progress(min(lit / total, 1.0))
 
-        # 查看知识树按钮（列表视图）
         with st.expander("📖 查看知识树"):
             tree_text = session.knowledge_tree.to_summary_text()
             st.markdown(tree_text, unsafe_allow_html=False)
 
         # 章节徽章
         chapters = session.knowledge_tree.get_chapter_nodes()
-        badges = []
-        for ch in chapters:
-            badge = session.knowledge_tree.get_chapter_badge(ch.id)
-            if badge:
-                badges.append(f"{badge} {ch.name}")
+        badges = [
+            f"{session.knowledge_tree.get_chapter_badge(ch.id)} {ch.name}"
+            for ch in chapters
+            if session.knowledge_tree.get_chapter_badge(ch.id)
+        ]
         if badges:
-            st.markdown("**🏅 章节徽章**")
             for b in badges:
-                st.markdown(f"  {b}")
+                st.caption(b)
 
         st.markdown("---")
     else:
-        # 如果没有知识树，显示生成按钮
         if st.button("🌳 生成知识树", key="gen_tree_btn", use_container_width=True):
             with st.spinner("正在拆解知识树..."):
                 success = session.generate_knowledge_tree()
@@ -145,77 +256,10 @@ def _render_knowledge_tree_section(session):
                     st.success("知识树已生成！")
                     st.rerun()
                 else:
-                    st.warning("知识树生成失败，请稍后重试")
+                    st.warning("生成失败，请稍后重试")
 
 
-def _render_save_load(session):
-    """渲染存档/读档控件"""
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("💾 存档", key="save_btn", use_container_width=True):
-            save_id = session.save_progress()
-            st.success(f"已保存！")
-
-    with col2:
-        if st.button("📂 读档", key="load_btn", use_container_width=True):
-            st.session_state["show_saves"] = True
-
-    # 显示存档列表
-    if st.session_state.get("show_saves"):
-        saves = session.list_saves()
-        if saves:
-            st.markdown("**📂 存档列表**")
-            for save in saves[:5]:  # 显示最近5个
-                col_info, col_load = st.columns([3, 1])
-                with col_info:
-                    st.caption(save.summary_text())
-                with col_load:
-                    if st.button("恢复", key=f"load_{save.save_id}", use_container_width=True):
-                        success = session.load_progress(save.save_id)
-                        if success:
-                            st.session_state["show_saves"] = False
-                            st.success("已恢复！")
-                            st.rerun()
-                        else:
-                            st.error("恢复失败")
-        else:
-            st.info("暂无存档")
-
-        if st.button("关闭", key="close_saves"):
-            st.session_state["show_saves"] = False
-            st.rerun()
-
-
-def _render_switch_controls(session):
-    """渲染切换主题/模式控件"""
-    with st.expander("🔄 切换主题/模式"):
-        # 切换模式
-        new_mode = st.selectbox(
-            "学习模式",
-            ["学科攻克", "领域探索"],
-            index=0 if session.mode == "academic" else 1,
-            key="mode_selector",
-        )
-        mode_map = {"学科攻克": "academic", "领域探索": "explore"}
-        if mode_map[new_mode] != session.mode:
-            if st.button("确认切换模式", key="switch_mode_btn"):
-                session.switch_mode(mode_map[new_mode])
-                st.success(f"已切换到 {new_mode} 模式")
-                st.rerun()
-
-        # 切换主题
-        new_topic = st.text_input(
-            "切换学习主题",
-            placeholder="输入新的学习主题...",
-            key="new_topic_input",
-        )
-        if new_topic and new_topic != session.topic:
-            if st.button("确认切换主题", key="switch_topic_btn"):
-                session.switch_topic(new_topic)
-                st.success(f"已切换到「{new_topic}」")
-                st.rerun()
-
+# ==================== 认知水平 ====================
 
 def _render_cognitive_level(session):
     """渲染认知水平"""
@@ -223,29 +267,30 @@ def _render_cognitive_level(session):
     level = score_summary["current_level"]
     score = score_summary["current_score"]
     trend = score_summary.get("trend", "stable")
-
     trend_icon = {"improving": "📈", "declining": "📉", "stable": "➡️"}.get(trend, "➡️")
 
-    st.markdown("### 📊 认知水平")
-    st.markdown(f"**{level}** ({score:.0f}/100) {trend_icon}")
+    st.markdown(f"### 📊 {level} ({score:.0f}分) {trend_icon}")
     st.progress(min(score / 100, 1.0))
 
+
+# ==================== 教材状态 ====================
 
 def _render_kb_status(session):
     """渲染教材知识库状态"""
     kb_stats = session.knowledge_base.get_stats()
     if kb_stats["total_chunks"] > 0:
-        st.markdown(f"📚 教材已加载：**{len(kb_stats['files'])}** 个文件 / **{kb_stats['total_chunks']}** 个片段")
+        st.caption(f"📚 教材：{len(kb_stats['files'])} 文件 / {kb_stats['total_chunks']} 片段")
     else:
-        st.caption("📚 未加载教材（将使用 AI 通用知识）")
+        st.caption("📚 未加载教材")
 
+
+# ==================== 性格画像 ====================
 
 def _render_personality(session):
     """渲染性格画像"""
     profile = session.personality_engine.profile
     with st.expander("👤 性格画像"):
-        cols = {"耐心": profile.patience, "自信": profile.confidence,
-                "主动": profile.initiative, "投入": profile.engagement_level}
-        for name, val in cols.items():
-            st.markdown(f"**{name}**")
+        for name, val in [("耐心", profile.patience), ("自信", profile.confidence),
+                          ("主动", profile.initiative), ("投入", profile.engagement_level)]:
+            st.caption(name)
             st.progress(min(val, 1.0))
