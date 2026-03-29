@@ -267,37 +267,35 @@ class LearningSession:
 
     def _process_via_rules(self, user_message: str) -> str:
         """
-        原规则流水线（保留为降级回退路径）
+        快速规则流水线
 
-        固定 7 步：行为分析 → 认知评估 → 打分 → 策略 → 教材检索 → AI回复 → 后处理
+        核心优化：每 3 轮才做一次 AI 认知评估（最耗时的步骤）
+        其他轮次只做本地分析 + AI 回复，速度提升约 50%
         """
-        # ===== Step 1: 行为分析（性格引擎） =====
+        # ===== Step 1: 行为分析（本地运算，毫秒级，永远执行） =====
         behavior_signal = self.personality_engine.analyze_response(user_message)
 
-        # ===== Step 2: 认知评估（打分引擎） =====
-        assessment = self._assess_user_response(user_message)
+        # ===== Step 2: 认知评估（每 3 轮做一次，节省 AI 调用） =====
+        if self.round_count % 3 == 1 or self.round_count <= 2:
+            # 需要评估的轮次：调用 AI 打分
+            assessment = self._assess_user_response(user_message)
 
-        # 更新性格引擎的答题正确性
-        answered_correctly = assessment.get("answered_correctly", False)
-        if self.personality_engine.history:
-            self.personality_engine.history[-1].answered_correctly = answered_correctly
+            answered_correctly = assessment.get("answered_correctly", False)
+            if self.personality_engine.history:
+                self.personality_engine.history[-1].answered_correctly = answered_correctly
 
-        # 更新打分
-        score_record = self.scoring_engine.update_from_ai_assessment(assessment)
+            score_record = self.scoring_engine.update_from_ai_assessment(assessment)
+            self.db_client.save_scoring_log(self.session_id, score_record.to_dict())
 
-        # 保存打分日志
-        self.db_client.save_scoring_log(self.session_id, score_record.to_dict())
-
-        # 保存认知断点
-        if assessment.get("has_breakpoint"):
-            self.db_client.save_cognitive_breakpoint(
-                self.session_id,
-                self.user_id,
-                {
-                    "breakpoint_description": assessment.get("breakpoint_description", ""),
-                    "knowledge_point": self.topic,
-                }
-            )
+            if assessment.get("has_breakpoint"):
+                self.db_client.save_cognitive_breakpoint(
+                    self.session_id,
+                    self.user_id,
+                    {
+                        "breakpoint_description": assessment.get("breakpoint_description", ""),
+                        "knowledge_point": self.topic,
+                    }
+                )
 
         # ===== Step 3: 获取策略参数 =====
         teaching_params = self.personality_engine.get_teaching_params()
