@@ -144,12 +144,89 @@ def end_learning():
 
 def restart_learning():
     """重新开始"""
-    for key in ["session", "summary", "messages_display", "show_saves"]:
+    for key in ["session", "summary", "messages_display", "show_saves",
+                "selected_role", "topic_input", "topic_field"]:
         if key in st.session_state:
             del st.session_state[key]
     st.session_state.phase = "onboarding"
     st.session_state.messages_display = []
     st.rerun()
+
+
+def _handle_loading_phase(config):
+    """处理从存档加载对话的流程"""
+    save_id = st.session_state.pop("pending_load_save_id", None)
+    user_id = st.session_state.pop("pending_load_user_id", None)
+
+    if not save_id or not user_id:
+        st.session_state.phase = "onboarding"
+        st.rerun()
+        return
+
+    with st.spinner("📂 正在加载存档..."):
+        from core.session_store import SessionStore
+        store = SessionStore()
+        save = store.load_session(user_id, save_id)
+
+        if not save:
+            st.error("⚠️ 存档加载失败")
+            st.session_state.phase = "onboarding"
+            st.rerun()
+            return
+
+        # 用存档数据创建新的 LearningSession
+        ai_client = AIClient(config)
+        db_client = DatabaseClient(config)
+        kb_dir = config.knowledge_base_dir if config.knowledge_base_dir else None
+
+        session = LearningSession(
+            ai_client=ai_client,
+            db_client=db_client,
+            user_id=user_id,
+            topic=save.topic,
+            mode=save.mode,
+            role=save.role,
+            knowledge_base_dir=kb_dir,
+        )
+
+        # 恢复状态
+        session.round_count = save.round_count
+        session.conversation_history = save.conversation_history or []
+        session.knowledge_highlights = save.knowledge_highlights or []
+        session.scoring_engine.current_score = save.cognitive_score
+        session.scoring_engine.current_level = save.cognitive_level
+
+        if save.personality_data:
+            session.personality_engine.load_from_profile_data(save.personality_data)
+
+        if save.knowledge_tree_data and save.knowledge_tree_data.get("nodes"):
+            from core.knowledge_tree import KnowledgeNode
+            session.knowledge_tree.topic = save.knowledge_tree_data.get("topic", save.topic)
+            session.knowledge_tree.root_id = save.knowledge_tree_data.get("root_id", "root")
+            session.knowledge_tree.created_at = save.knowledge_tree_data.get("created_at", "")
+            session.knowledge_tree.nodes = {
+                nid: KnowledgeNode.from_dict(ndata)
+                for nid, ndata in save.knowledge_tree_data.get("nodes", {}).items()
+            }
+
+        if save.planner_data:
+            session.learning_planner.load_from_dict(save.planner_data)
+            session.learning_planner.knowledge_tree = session.knowledge_tree
+
+        # 重新初始化 Agent
+        if session._use_agent:
+            try:
+                session._init_agent()
+            except Exception:
+                session._use_agent = False
+
+        # 保存到 session state
+        st.session_state.session = session
+        st.session_state.phase = "learning"
+        if save.messages_display:
+            st.session_state.messages_display = save.messages_display
+
+        st.rerun()
 
 
 # ==================== 主渲染 ====================
@@ -177,6 +254,10 @@ def main():
         if result:
             role, topic, mode = result
             start_learning(role, topic, mode)
+
+    elif phase == "loading":
+        # 从存档加载对话（由侧边栏 _load_chat 触发）
+        _handle_loading_phase(config)
 
     elif phase == "learning":
         if not session:

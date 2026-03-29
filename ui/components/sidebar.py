@@ -79,8 +79,12 @@ def _start_new_chat(session):
             session.save_progress("自动存档")
         except Exception:
             pass
-    # 清除当前会话，回到 onboarding
-    for key in ["session", "summary", "messages_display"]:
+    # 清除当前会话相关的所有 session state，回到 onboarding
+    keys_to_clear = [
+        "session", "summary", "messages_display", "show_saves",
+        "selected_role", "topic_input", "topic_field",
+    ]
+    for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
     st.session_state.phase = "onboarding"
@@ -136,16 +140,14 @@ def _load_chat(session, save_id, user_id):
         if success:
             st.session_state.phase = "learning"
             st.rerun()
+        else:
+            st.toast("⚠️ 读取存档失败", icon="⚠️")
     else:
-        # 没有 session，需要创建一个然后加载
-        from core.session_store import SessionStore
-        store = SessionStore()
-        save = store.load_session(user_id, save_id)
-        if save:
-            # 存到 session_state，让 app.py 重新初始化
-            st.session_state["pending_load"] = save
-            st.session_state.phase = "loading"
-            st.rerun()
+        # 没有 session，把存档信息存到 session_state，让 app.py 重新初始化
+        st.session_state["pending_load_save_id"] = save_id
+        st.session_state["pending_load_user_id"] = user_id
+        st.session_state.phase = "loading"
+        st.rerun()
 
 
 # ==================== 思考模式 ====================
