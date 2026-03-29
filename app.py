@@ -59,8 +59,21 @@ def init_session_state():
     if "messages_display" not in st.session_state:
         st.session_state.messages_display = []
     if "user_id" not in st.session_state:
-        from utils.helpers import generate_session_id
-        st.session_state.user_id = generate_session_id()
+        # 优先从 URL 参数恢复 user_id，保证刷新后不丢失
+        params = st.query_params
+        uid_from_url = params.get("uid", "")
+        if uid_from_url:
+            st.session_state.user_id = uid_from_url
+        else:
+            from utils.helpers import generate_session_id
+            new_uid = generate_session_id()
+            st.session_state.user_id = new_uid
+            st.query_params["uid"] = new_uid
+    else:
+        # 确保 URL 参数始终和 session_state 同步
+        current_uid = st.session_state.user_id
+        if st.query_params.get("uid", "") != current_uid:
+            st.query_params["uid"] = current_uid
     if "show_saves" not in st.session_state:
         st.session_state.show_saves = False
 
