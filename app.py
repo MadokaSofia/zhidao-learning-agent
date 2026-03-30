@@ -129,6 +129,58 @@ def handle_user_input(user_input: str):
     """处理用户输入"""
     session: LearningSession = st.session_state.session
 
+    # 检测用户是否请求知识点总结
+    summary_keywords = ["/总结", "总结一下", "知识总结", "知识点总结", "帮我总结", "学习总结"]
+    user_input_lower = user_input.strip().lower()
+    is_summary_request = any(keyword in user_input_lower for keyword in summary_keywords)
+
+    if is_summary_request:
+        # 添加用户消息到显示列表
+        st.session_state.messages_display.append(
+            {"role": "user", "content": user_input}
+        )
+
+        # 生成阶段性知识点总结
+        with st.spinner("📚 正在生成知识点总结..."):
+            try:
+                summary = session.generate_summary()
+
+                # 构建总结回复
+                response_parts = ["## 📚 阶段性知识点总结\n"]
+
+                if summary.get("notes"):
+                    response_parts.append(f"### 📝 学习笔记\n{summary['notes']}\n")
+
+                if summary.get("highlights"):
+                    response_parts.append("### 📌 关键知识点\n")
+                    for highlight in summary["highlights"]:
+                        response_parts.append(f"- {highlight}")
+                    response_parts.append("")
+
+                if summary.get("score_summary"):
+                    score = summary["score_summary"]
+                    response_parts.append(f"### 📊 认知评估\n")
+                    response_parts.append(f"- 当前水平：**{score.get('current_level', '未知')}**")
+                    response_parts.append(f"- 认知分数：**{score.get('current_score', 0):.0f}/100**\n")
+
+                response_parts.append("---")
+                response_parts.append("💡 **提示**：总结已完成，你可以继续学习，或输入新的问题深入探讨！")
+
+                response = "\n".join(response_parts)
+
+            except Exception as e:
+                response = f"生成总结时出错：{str(e)}。请继续学习后再试。"
+
+        # 添加 AI 回复到显示列表
+        st.session_state.messages_display.append(
+            {"role": "assistant", "content": response}
+        )
+
+        # 自动存档
+        _autosave(session)
+        st.rerun()
+        return
+
     # 添加用户消息到显示列表
     st.session_state.messages_display.append(
         {"role": "user", "content": user_input}

@@ -419,6 +419,9 @@ class LearningSession:
 
     def switch_mode(self, new_mode: str):
         """中途切换学习模式"""
+        # 先保存当前模式的进度
+        self.save_progress(f"自动存档-切换到{'学科攻克' if new_mode == 'academic' else '领域探索'}模式")
+
         self.mode = new_mode
         if self._use_agent:
             try:
