@@ -291,6 +291,11 @@ def _render_cognitive_level(session):
     st.markdown(f"### 📊 {level} ({score:.0f}分) {trend_icon}")
     st.progress(min(score / 100, 1.0))
 
+    # 结束学习并生成总结
+    st.markdown("---")
+    if st.button("📊 结束学习并总结", key="end_learning_sidebar", use_container_width=True, type="primary"):
+        _trigger_end_learning()
+
 
 # ==================== 教材状态 ====================
 
@@ -313,3 +318,20 @@ def _render_personality(session):
                           ("主动", profile.initiative), ("投入", profile.engagement_level)]:
             st.caption(name)
             st.progress(min(val, 1.0))
+
+
+# ==================== 结束学习 ====================
+
+def _trigger_end_learning():
+    """触发结束学习：生成总结并展示"""
+    import streamlit as st
+    session = st.session_state.get("session")
+    if not session:
+        st.toast("⚠️ 没有活跃的学习会话", icon="⚠️")
+        return
+    
+    with st.spinner("📝 正在生成学习总结..."):
+        summary = session.end_learning()
+        st.session_state.summary = summary
+    st.session_state.phase = "summary"
+    st.rerun()

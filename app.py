@@ -472,11 +472,8 @@ def main():
         # 渲染聊天消息
         render_chat_messages(st.session_state.messages_display)
 
-        # 底部操作栏
-        col1, col2 = st.columns([6, 1])
-        with col2:
-            if st.button("📊 结束学习", key="end_btn", use_container_width=True):
-                end_learning()
+        # 底部操作栏已移除 - 总结功能移至侧边栏
+        pass
 
         # 聊天输入
         render_chat_input(handle_user_input)
